@@ -23,14 +23,19 @@
         .upload-btn {
             background: #007AFF; color: white; border: none; padding: 12px;
             border-radius: 8px; font-weight: bold; cursor: pointer; text-align: center;
-            display: block; width: 100%; margin-bottom: 10px;
+            display: block; width: 100%; margin-bottom: 5px;
         }
         #file-input { display: none; }
+
+        #pallet-count-msg {
+            font-size: 0.9em; color: #007AFF; font-weight: bold;
+            text-align: center; margin-bottom: 10px; display: none;
+        }
 
         select {
             width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #ccc;
             background: white; font-size: 14px; margin-bottom: 10px; cursor: pointer;
-            font-family: monospace; /* Para que los IDs se alineen mejor visualmente */
+            font-family: monospace;
         }
 
         .btn-group { display: flex; gap: 10px; margin-bottom: 5px; }
@@ -60,6 +65,7 @@
             <h3>Carga de Datos</h3>
             <label for="file-input" class="upload-btn">CARGAR JSON</label>
             <input type="file" id="file-input" accept=".json">
+            <div id="pallet-count-msg"></div>
             
             <div id="pallet-selector-container" style="display:none;">
                 <div class="slider-label">Listado de Pallets:</div>
@@ -89,9 +95,9 @@
         <section id="details-panel">
             <h3>Detalles del Item</h3>
             <div class="info-row"><strong>Nombre:</strong> <span id="det-name"></span></div>
+            <div class="info-row"><strong>ID:</strong> <span id="det-id"></span></div>
             <div class="info-row"><strong>Origen (X,Y,Z):</strong> <br><span id="det-origin"></span></div>
             <div class="info-row"><strong>Medidas:</strong> <br><span id="det-dim"></span></div>
-            <div class="info-row"><strong>Peso:</strong> <span id="det-weight"></span> kg</div>
             <div class="info-row"><strong>Apilable:</strong> <span id="det-stack"></span></div>
             <div id="color-box" class="color-preview"></div>
         </section>
@@ -102,7 +108,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 
     <script>
-        const ESCALA = 10;
+        const ESCALA = 1; 
         let scene, camera, renderer, palletGroup;
         let allItemsMeshes = [];
         let currentVisibleIndex = 0;
@@ -113,7 +119,7 @@
         let jsonData = null;
 
         let camYaw = 45, camPitch = 20, camZoom = 0.8;
-        const camRadius = 1000;
+        const camRadius = 40; 
 
         function init() {
             scene = new THREE.Scene();
@@ -124,10 +130,10 @@
             renderer.setPixelRatio(window.devicePixelRatio);
             container.appendChild(renderer.domElement);
 
-            camera = new THREE.PerspectiveCamera(45, container.clientWidth/container.clientHeight, 1, 20000);
+            camera = new THREE.PerspectiveCamera(45, container.clientWidth/container.clientHeight, 0.1, 1000);
             scene.add(new THREE.AmbientLight(0xffffff, 0.7));
             const sun = new THREE.DirectionalLight(0xffffff, 0.5);
-            sun.position.set(1000, 2000, 1000);
+            sun.position.set(50, 100, 50);
             scene.add(sun);
 
             palletGroup = new THREE.Group();
@@ -155,9 +161,15 @@
                 reader.onload = (ev) => {
                     try {
                         jsonData = JSON.parse(ev.target.result);
+                        
+                        // Mostrar mensaje de número de pallets
+                        const msg = document.getElementById('pallet-count-msg');
+                        msg.innerText = `Pallets usados: ${jsonData.number_of_pallets || jsonData.pallets.length}`;
+                        msg.style.display = 'block';
+
                         populateSelector(jsonData.pallets);
                         preparePallet(jsonData.pallets[0]);
-                    } catch (err) { alert("Error en el formato del JSON"); }
+                    } catch (err) { alert("Error en el formato del JSON"); console.error(err); }
                 };
                 reader.readAsText(file);
             });
@@ -169,8 +181,7 @@
             pallets.forEach((p, index) => {
                 const opt = document.createElement('option');
                 opt.value = index;
-                // Formato solicitado: Contador, Nombre e ID
-                const label = `[${index + 1}] ${p.name || 'Sin Nombre'} (ID: ${p.id})`;
+                const label = `ID: ${p.palletID} (${p.packagedItems.length} items)`;
                 opt.innerText = label;
                 select.appendChild(opt);
             });
@@ -216,22 +227,23 @@
             document.getElementById('details-panel').style.display = 'none';
             document.getElementById('sequence-controls').style.display = 'block';
 
+            // Ejes corregidos: X=Profundidad, Y=Ancho, Z=Altura
             currentPalletDims = { 
-                x: pallet.dimensions[0]/ESCALA, 
-                y: pallet.dimensions[1]/ESCALA, 
-                z: pallet.dimensions[2]/ESCALA 
+                x: pallet.dx / ESCALA, 
+                y: pallet.dy / ESCALA, 
+                z: pallet.dz / ESCALA 
             };
             const mColor = 0x8B4513;
 
-            // Base
+            // Base corregida (Ancho y Profundidad)
             const baseGeo = new THREE.PlaneGeometry(currentPalletDims.y, currentPalletDims.x);
             const baseMat = new THREE.MeshPhongMaterial({ color: mColor, side: THREE.DoubleSide, transparent: true, opacity: 0.7 });
             const base = new THREE.Mesh(baseGeo, baseMat);
             base.rotation.x = -Math.PI / 2;
             palletGroup.add(base);
 
-            // Estructura (Jaula)
-            const t = 2;
+            // Estructura corregida
+            const t = 0.2; 
             const { x: px, y: py, z: pz } = currentPalletDims;
             const skeletonParts = [
                 [t, pz, t, py/2, pz/2, px/2], [t, pz, t, -py/2, pz/2, px/2], [t, pz, t, py/2, pz/2, -px/2], [t, pz, t, -py/2, pz/2, -px/2],
@@ -241,20 +253,20 @@
             skeletonParts.forEach(s => palletGroup.add(createThickBar(s[0], s[1], s[2], s[3], s[4], s[5], mColor)));
 
             // Items
-            pallet.items.forEach((item, i) => {
-                const color = new THREE.Color().setHSL(i / pallet.items.length, 0.7, 0.5);
-                const iX = item.dimensions[0] / ESCALA;
-                const iY = item.dimensions[1] / ESCALA;
-                const iZ = item.dimensions[2] / ESCALA;
+            pallet.packagedItems.forEach((item, i) => {
+                const color = new THREE.Color().setHSL(i / pallet.packagedItems.length, 0.7, 0.5);
+                const iX = item.dx / ESCALA; 
+                const iY = item.dy / ESCALA; 
+                const iZ = item.dz / ESCALA; 
 
                 const geo = new THREE.BoxGeometry(iY, iZ, iX);
                 const mat = new THREE.MeshPhongMaterial({ color: color, transparent: true, opacity: 0.7, depthWrite: true });
                 const mesh = new THREE.Mesh(geo, mat);
 
                 mesh.position.set(
-                    (item.origin[1] / ESCALA) + iY/2 - currentPalletDims.y/2,
-                    (item.origin[2] / ESCALA) + iZ/2,
-                    (item.origin[0] / ESCALA) + iX/2 - currentPalletDims.x/2
+                    (item.origin.y / ESCALA) + iY/2 - currentPalletDims.y/2, // Lateral
+                    (item.origin.z / ESCALA) + iZ/2,                        // Altura
+                    (item.origin.x / ESCALA) + iX/2 - currentPalletDims.x/2  // Profundidad
                 );
 
                 mesh.userData = { ...item, hex: "#" + color.getHexString() };
@@ -282,10 +294,10 @@
 
                 const d = selectedBox.userData;
                 document.getElementById('details-panel').style.display = 'block';
-                document.getElementById('det-name').innerText = d.name;
-                document.getElementById('det-origin').innerText = `${d.origin[0]}, ${d.origin[1]}, ${d.origin[2]}`;
-                document.getElementById('det-dim').innerText = `${d.dimensions[0]} x ${d.dimensions[1]} x ${d.dimensions[2]} mm`;
-                document.getElementById('det-weight').innerText = d.weight;
+                document.getElementById('det-name').innerText = d.itemName;
+                document.getElementById('det-id').innerText = d.itemID;
+                document.getElementById('det-origin').innerText = `X:${d.origin.x}, Y:${d.origin.y}, Z:${d.origin.z}`;
+                document.getElementById('det-dim').innerText = `${d.dx} x ${d.dy} x ${d.dz}`;
                 document.getElementById('det-stack').innerText = d.allowStacking ? "Sí" : "No";
                 document.getElementById('color-box').style.backgroundColor = d.hex;
             }
