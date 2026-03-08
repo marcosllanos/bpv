@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Visualizador Multi-Pallet Pro</title>
+    <style>
+        :root { --panel-width: 300px; --bg-color: #f0f0f0; }
+        * { box-sizing: border-box; touch-action: none; }
+        body, html {
+            margin: 0; padding: 0; overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            height: 100vh; width: 100vw; display: flex; background-color: var(--bg-color);
+        }
+        #sidebar {
+            width: var(--panel-width); height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px);
+            padding: 20px; z-index: 100; box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+            display: flex; flex-direction: column; gap: 15px; flex-shrink: 0; overflow-y: auto;
+        }
+        #container3d { flex-grow: 1; height: 100vh; background: var(--bg-color); position: relative; }
+        
+        .upload-btn {
+            background: #007AFF; color: white; border: none; padding: 12px;
+            border-radius: 8px; font-weight: bold; cursor: pointer; text-align: center;
+            display: block; width: 100%; margin-bottom: 10px;
+        }
+        #file-input { display: none; }
+
+        select {
+            width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #ccc;
+            background: white; font-size: 14px; margin-bottom: 10px; cursor: pointer;
+            font-family: monospace; /* Para que los IDs se alineen mejor visualmente */
+        }
+
+        .btn-group { display: flex; gap: 10px; margin-bottom: 5px; }
+        .nav-btn {
+            flex: 1; background: #34C759; color: white; border: none; padding: 10px;
+            border-radius: 8px; font-weight: bold; cursor: pointer;
+        }
+        .nav-btn.back { background: #FF3B30; }
+
+        h3 { margin: 0 0 10px 0; color: #333; font-size: 1.1em; border-bottom: 2px solid #ccc; padding-bottom: 5px; }
+        .slider-label { display: flex; justify-content: space-between; font-size: 0.85em; margin-bottom: 5px; font-weight: 600; color: #555; }
+        input[type=range] { width: 100%; height: 25px; cursor: pointer; margin-bottom: 10px; }
+        
+        #details-panel {
+            padding: 15px; background: #ffffff; border-radius: 10px;
+            border: 1px solid #ddd; display: none; box-shadow: inset 0 0 5px rgba(0,0,0,0.05);
+        }
+        .info-row { margin-bottom: 8px; font-size: 0.9em; line-height: 1.4; color: #444; }
+        .color-preview { height: 25px; width: 100%; margin-top: 10px; border-radius: 6px; border: 1px solid #999; }
+        .counter { text-align: center; font-size: 0.8em; color: #666; font-weight: bold; margin-top: 5px; }
+    </style>
+</head>
+<body>
+
+    <aside id="sidebar">
+        <section>
+            <h3>Carga de Datos</h3>
+            <label for="file-input" class="upload-btn">CARGAR JSON</label>
+            <input type="file" id="file-input" accept=".json">
+            
+            <div id="pallet-selector-container" style="display:none;">
+                <div class="slider-label">Listado de Pallets:</div>
+                <select id="pallet-select"></select>
+            </div>
+        </section>
+
+        <section id="sequence-controls" style="display:none;">
+            <h3>Secuencia de Carga</h3>
+            <div class="btn-group">
+                <button id="btn-back" class="nav-btn back">ATRÁS</button>
+                <button id="btn-next" class="nav-btn">ADELANTE</button>
+            </div>
+            <div class="counter" id="item-counter">Items: 0 / 0</div>
+        </section>
+
+        <section>
+            <h3>Cámara</h3>
+            <div class="slider-label">Rotación <span id="val-yaw">45°</span></div>
+            <input type="range" id="slider-yaw" min="0" max="360" value="45">
+            <div class="slider-label">Inclinación <span id="val-pitch">20°</span></div>
+            <input type="range" id="slider-pitch" min="-45" max="45" value="20">
+            <div class="slider-label">Zoom <span id="val-zoom">100%</span></div>
+            <input type="range" id="slider-zoom" min="10" max="200" value="100">
+        </section>
+
+        <section id="details-panel">
+            <h3>Detalles del Item</h3>
+            <div class="info-row"><strong>Nombre:</strong> <span id="det-name"></span></div>
+            <div class="info-row"><strong>Origen (X,Y,Z):</strong> <br><span id="det-origin"></span></div>
+            <div class="info-row"><strong>Medidas:</strong> <br><span id="det-dim"></span></div>
+            <div class="info-row"><strong>Peso:</strong> <span id="det-weight"></span> kg</div>
+            <div class="info-row"><strong>Apilable:</strong> <span id="det-stack"></span></div>
+            <div id="color-box" class="color-preview"></div>
+        </section>
+    </aside>
+
+    <div id="container3d"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <script>
+        const ESCALA = 10;
+        let scene, camera, renderer, palletGroup;
+        let allItemsMeshes = [];
+        let currentVisibleIndex = 0;
+        let selectedBox = null;
+        let raycaster = new THREE.Raycaster();
+        let mouse = new THREE.Vector2();
+        let currentPalletDims = { x: 0, y: 0, z: 0 };
+        let jsonData = null;
+
+        let camYaw = 45, camPitch = 20, camZoom = 0.8;
+        const camRadius = 1000;
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xf0f0f0);
+            const container = document.getElementById('container3d');
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            container.appendChild(renderer.domElement);
+
+            camera = new THREE.PerspectiveCamera(45, container.clientWidth/container.clientHeight, 1, 20000);
+            scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+            const sun = new THREE.DirectionalLight(0xffffff, 0.5);
+            sun.position.set(1000, 2000, 1000);
+            scene.add(sun);
+
+            palletGroup = new THREE.Group();
+            scene.add(palletGroup);
+
+            setupControls();
+            setupFileLoader();
+            setupNavigation();
+            
+            document.getElementById('pallet-select').addEventListener('change', (e) => {
+                const pallet = jsonData.pallets[e.target.value];
+                preparePallet(pallet);
+            });
+
+            window.addEventListener('resize', onResize);
+            renderer.domElement.addEventListener('pointerdown', onSelect);
+            animate();
+        }
+
+        function setupFileLoader() {
+            document.getElementById('file-input').addEventListener('change', function(e) {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    try {
+                        jsonData = JSON.parse(ev.target.result);
+                        populateSelector(jsonData.pallets);
+                        preparePallet(jsonData.pallets[0]);
+                    } catch (err) { alert("Error en el formato del JSON"); }
+                };
+                reader.readAsText(file);
+            });
+        }
+
+        function populateSelector(pallets) {
+            const select = document.getElementById('pallet-select');
+            select.innerHTML = '';
+            pallets.forEach((p, index) => {
+                const opt = document.createElement('option');
+                opt.value = index;
+                // Formato solicitado: Contador, Nombre e ID
+                const label = `[${index + 1}] ${p.name || 'Sin Nombre'} (ID: ${p.id})`;
+                opt.innerText = label;
+                select.appendChild(opt);
+            });
+            document.getElementById('pallet-selector-container').style.display = 'block';
+        }
+
+        function setupNavigation() {
+            document.getElementById('btn-next').onclick = () => {
+                if (currentVisibleIndex < allItemsMeshes.length) {
+                    palletGroup.add(allItemsMeshes[currentVisibleIndex]);
+                    currentVisibleIndex++;
+                    updateCounter();
+                }
+            };
+            document.getElementById('btn-back').onclick = () => {
+                if (currentVisibleIndex > 0) {
+                    currentVisibleIndex--;
+                    palletGroup.remove(allItemsMeshes[currentVisibleIndex]);
+                    if (selectedBox === allItemsMeshes[currentVisibleIndex]) {
+                        document.getElementById('details-panel').style.display = 'none';
+                    }
+                    updateCounter();
+                }
+            };
+        }
+
+        function updateCounter() {
+            document.getElementById('item-counter').innerText = `Items: ${currentVisibleIndex} / ${allItemsMeshes.length}`;
+        }
+
+        function createThickBar(w, h, d, x, y, z, color) {
+            const geo = new THREE.BoxGeometry(w, h, d);
+            const mat = new THREE.MeshPhongMaterial({ color: color });
+            const bar = new THREE.Mesh(geo, mat);
+            bar.position.set(x, y, z);
+            return bar;
+        }
+
+        function preparePallet(pallet) {
+            while(palletGroup.children.length > 0) palletGroup.remove(palletGroup.children[0]);
+            allItemsMeshes = [];
+            currentVisibleIndex = 0;
+            document.getElementById('details-panel').style.display = 'none';
+            document.getElementById('sequence-controls').style.display = 'block';
+
+            currentPalletDims = { 
+                x: pallet.dimensions[0]/ESCALA, 
+                y: pallet.dimensions[1]/ESCALA, 
+                z: pallet.dimensions[2]/ESCALA 
+            };
+            const mColor = 0x8B4513;
+
+            // Base
+            const baseGeo = new THREE.PlaneGeometry(currentPalletDims.y, currentPalletDims.x);
+            const baseMat = new THREE.MeshPhongMaterial({ color: mColor, side: THREE.DoubleSide, transparent: true, opacity: 0.7 });
+            const base = new THREE.Mesh(baseGeo, baseMat);
+            base.rotation.x = -Math.PI / 2;
+            palletGroup.add(base);
+
+            // Estructura (Jaula)
+            const t = 2;
+            const { x: px, y: py, z: pz } = currentPalletDims;
+            const skeletonParts = [
+                [t, pz, t, py/2, pz/2, px/2], [t, pz, t, -py/2, pz/2, px/2], [t, pz, t, py/2, pz/2, -px/2], [t, pz, t, -py/2, pz/2, -px/2],
+                [py, t, t, 0, pz, px/2], [py, t, t, 0, pz, -px/2], [t, t, px, py/2, pz, 0], [t, t, px, -py/2, pz, 0],
+                [py, t, t, 0, 0, px/2], [py, t, t, 0, 0, -px/2], [t, t, px, py/2, 0, 0], [t, t, px, -py/2, 0, 0]
+            ];
+            skeletonParts.forEach(s => palletGroup.add(createThickBar(s[0], s[1], s[2], s[3], s[4], s[5], mColor)));
+
+            // Items
+            pallet.items.forEach((item, i) => {
+                const color = new THREE.Color().setHSL(i / pallet.items.length, 0.7, 0.5);
+                const iX = item.dimensions[0] / ESCALA;
+                const iY = item.dimensions[1] / ESCALA;
+                const iZ = item.dimensions[2] / ESCALA;
+
+                const geo = new THREE.BoxGeometry(iY, iZ, iX);
+                const mat = new THREE.MeshPhongMaterial({ color: color, transparent: true, opacity: 0.7, depthWrite: true });
+                const mesh = new THREE.Mesh(geo, mat);
+
+                mesh.position.set(
+                    (item.origin[1] / ESCALA) + iY/2 - currentPalletDims.y/2,
+                    (item.origin[2] / ESCALA) + iZ/2,
+                    (item.origin[0] / ESCALA) + iX/2 - currentPalletDims.x/2
+                );
+
+                mesh.userData = { ...item, hex: "#" + color.getHexString() };
+                const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color: 0x000000 }));
+                mesh.add(edges);
+                allItemsMeshes.push(mesh);
+            });
+
+            updateCounter();
+        }
+
+        function onSelect(e) {
+            const rect = renderer.domElement.getBoundingClientRect();
+            mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+            mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+            const visibleBoxes = palletGroup.children.filter(child => allItemsMeshes.includes(child));
+            const hits = raycaster.intersectObjects(visibleBoxes);
+
+            if(hits.length > 0) {
+                if (selectedBox) selectedBox.material.opacity = 0.7;
+                selectedBox = hits[0].object;
+                selectedBox.material.opacity = 0.95;
+
+                const d = selectedBox.userData;
+                document.getElementById('details-panel').style.display = 'block';
+                document.getElementById('det-name').innerText = d.name;
+                document.getElementById('det-origin').innerText = `${d.origin[0]}, ${d.origin[1]}, ${d.origin[2]}`;
+                document.getElementById('det-dim').innerText = `${d.dimensions[0]} x ${d.dimensions[1]} x ${d.dimensions[2]} mm`;
+                document.getElementById('det-weight').innerText = d.weight;
+                document.getElementById('det-stack').innerText = d.allowStacking ? "Sí" : "No";
+                document.getElementById('color-box').style.backgroundColor = d.hex;
+            }
+        }
+
+        function setupControls() {
+            const sYaw = document.getElementById('slider-yaw');
+            const sPitch = document.getElementById('slider-pitch');
+            const sZoom = document.getElementById('slider-zoom');
+
+            sYaw.oninput = (e) => { camYaw = e.target.value; document.getElementById('val-yaw').innerText = e.target.value + '°'; };
+            sPitch.oninput = (e) => { camPitch = e.target.value; document.getElementById('val-pitch').innerText = e.target.value + '°'; };
+            sZoom.oninput = (e) => { camZoom = e.target.value/100; document.getElementById('val-zoom').innerText = e.target.value + '%'; };
+
+            let isMoving = false, px = 0, py = 0;
+            renderer.domElement.addEventListener('pointerdown', (e) => { isMoving = true; px = e.clientX; py = e.clientY; });
+            window.addEventListener('pointermove', (e) => {
+                if(!isMoving) return;
+                camYaw -= (e.clientX - px) * 0.5;
+                camPitch += (e.clientY - py) * 0.5;
+                camPitch = Math.max(-45, Math.min(45, camPitch));
+                sYaw.value = ((camYaw % 360) + 360) % 360;
+                sPitch.value = camPitch;
+                document.getElementById('val-yaw').innerText = Math.round(sYaw.value) + '°';
+                document.getElementById('val-pitch').innerText = Math.round(camPitch) + '°';
+                px = e.clientX; py = e.clientY;
+            });
+            window.addEventListener('pointerup', () => isMoving = false);
+        }
+
+        function onResize() {
+            const c = document.getElementById('container3d');
+            camera.aspect = c.clientWidth / c.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(c.clientWidth, c.clientHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const phi = THREE.MathUtils.degToRad(90 - camPitch);
+            const theta = THREE.MathUtils.degToRad(camYaw);
+            camera.position.x = (camRadius / camZoom) * Math.sin(phi) * Math.cos(theta);
+            camera.position.y = (camRadius / camZoom) * Math.cos(phi);
+            camera.position.z = (camRadius / camZoom) * Math.sin(phi) * Math.sin(theta);
+            camera.lookAt(0, currentPalletDims.z/2, 0);
+            renderer.render(scene, camera);
+        }
+
+        init();
+    </script>
+</body>
+</html>
