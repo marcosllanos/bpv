@@ -119,7 +119,7 @@
         let jsonData = null;
 
         let camYaw = 45, camPitch = 20, camZoom = 0.8;
-        const camRadius = 40; 
+        let baseRadius = 40; // Radio dinámico que cambiará según el pallet
 
         function init() {
             scene = new THREE.Scene();
@@ -233,6 +233,32 @@
                 y: pallet.dy / ESCALA, 
                 z: pallet.dz / ESCALA 
             };
+
+            // --- CÁLCULO AUTOMÁTICO DE LA DISTANCIA DE LA CÁMARA ---
+            const maxDim = Math.max(currentPalletDims.x, currentPalletDims.y, currentPalletDims.z);
+            const fov = camera.fov * (Math.PI / 180);
+
+            // Ajustar los planos de recorte (near y far) según el tamaño del pallet
+            camera.near = Math.max(0.1, maxDim / 1000);
+            camera.far = maxDim * 50; // Ampliamos el campo de visión "far" para objetos grandes
+            camera.updateProjectionMatrix();
+
+            // Distancia exacta para que el objeto entre holgadamente en pantalla (con un 40% de margen)
+            baseRadius = (maxDim / 2) / Math.tan(fov / 2) * 1.4;
+
+            // Resetear el zoom a 100% cada vez que cambias de pallet
+            camZoom = 1.0;
+
+            const sliderZoom = document.getElementById('slider-zoom');
+            const valZoom = document.getElementById('val-zoom');
+
+            if (sliderZoom) {
+                sliderZoom.value = 100; // El slider usa 100 para representar el 100% (camZoom = 1.0)
+            }
+            if (valZoom) {
+                valZoom.innerText = "100%"; // Actualiza el texto visual junto al título de Zoom
+            }
+
             const mColor = 0x8B4513;
 
             // Base corregida (Ancho y Profundidad)
@@ -243,7 +269,7 @@
             palletGroup.add(base);
 
             // Estructura corregida
-            const t = 0.2; 
+            const t = Math.max(0.05, maxDim * 0.002);
             const { x: px, y: py, z: pz } = currentPalletDims;
             const skeletonParts = [
                 [t, pz, t, py/2, pz/2, px/2], [t, pz, t, -py/2, pz/2, px/2], [t, pz, t, py/2, pz/2, -px/2], [t, pz, t, -py/2, pz/2, -px/2],
@@ -339,10 +365,17 @@
             requestAnimationFrame(animate);
             const phi = THREE.MathUtils.degToRad(90 - camPitch);
             const theta = THREE.MathUtils.degToRad(camYaw);
-            camera.position.x = (camRadius / camZoom) * Math.sin(phi) * Math.cos(theta);
-            camera.position.y = (camRadius / camZoom) * Math.cos(phi);
-            camera.position.z = (camRadius / camZoom) * Math.sin(phi) * Math.sin(theta);
-            camera.lookAt(0, currentPalletDims.z/2, 0);
+            
+            // Usar el radio dinámico calculado según el tamaño del pallet
+            const currentRadius = baseRadius / camZoom;
+
+            camera.position.x = currentRadius * Math.sin(phi) * Math.cos(theta);
+            camera.position.y = currentRadius * Math.cos(phi);
+            camera.position.z = currentRadius * Math.sin(phi) * Math.sin(theta);
+            
+            // Mirar al centro del pallet en altura
+            camera.lookAt(0, currentPalletDims.z / 2, 0);
+            
             renderer.render(scene, camera);
         }
 
